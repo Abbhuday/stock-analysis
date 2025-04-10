@@ -29,27 +29,30 @@ NEWS_SOURCES = {
 }
 
 # ---------------------- EVALUATION ----------------------
-def evaluate_rule(val, rule):
+def evaluate_rule(val, rule_tuple):
     try:
-        op = rule.strip()[0:2] if rule[1] in '=<' else rule[0]
-        num = float(rule.replace(op, ''))
+        op, val_input, _ = rule_tuple
+        val = float(val)
+        num = float(val_input)
         return eval(f"{val} {op} {num}")
     except:
         return False
 
 def evaluate_all(metrics, rules):
     results = []
-    for metric, rule in rules.items():
+    for metric, (op, val_input, weight, include) in rules.items():
+        if not include:
+            continue
         value = metrics.get(metric)
         if value is None:
-            results.append((metric, "Missing", rule, False))
+            results.append((metric, "Missing", f"{op} {val_input}", weight, False))
             continue
         try:
             val = float(value)
-            passed = evaluate_rule(val, rule)
-            results.append((metric, val, rule, passed))
+            passed = evaluate_rule(val, (op, val_input, weight))
+            results.append((metric, val, f"{op} {val_input}", weight, passed))
         except:
-            results.append((metric, value, rule, False))
+            results.append((metric, value, f"{op} {val_input}", weight, False))
     return results
 
 # ---------------------- NEWS ----------------------
@@ -77,8 +80,8 @@ metric_inputs = {}
 cols = st.columns(3)
 for idx, (label, _) in enumerate(REQUIRED_METRICS.items()):
     with cols[idx % 3]:
-        st.markdown(f"<label style='font-size:16px; font-weight:600'>{label}</label>", unsafe_allow_html=True)
-        val = st.text_input(" ", key=f"manual_{label}")
+        st.markdown(f"<label style='font-size:16px; font-weight:600; margin-bottom:-10px;'>{label}</label>", unsafe_allow_html=True)
+        val = st.text_input("", key=f"manual_{label}")
         if val:
             metric_inputs[label] = val
 
@@ -94,22 +97,26 @@ if run_eval:
     else:
         st.success("All required metrics available. Proceeding with evaluation.")
 
-        # Evaluation criteria in sidebar after button click
+        rule_inputs = {}
         with st.sidebar:
             st.header("📋 Set Evaluation Rules")
-            rule_inputs = {}
             for label in REQUIRED_METRICS:
-                rule_val = st.text_input(f"{label} Rule", key=f"rule_{label}", value="")
-                if rule_val:
-                    rule_inputs[label] = rule_val
+                row = st.columns([1, 2, 1.5, 1.5])
+                include = row[0].checkbox("✔", value=True, key=f"check_{label}")
+                op = row[1].selectbox("", [">", "<", "="], key=f"op_{label}")
+                rule_val = row[2].text_input("", key=f"val_{label}")
+                weight = row[3].slider("Weight", min_value=0, max_value=100, value=100, key=f"w_{label}")
+                rule_inputs[label] = (op, rule_val, weight, include)
 
         st.subheader("📈 Evaluation Results")
         results = evaluate_all(metric_inputs, rule_inputs)
-        score = int(100 * sum(r[3] for r in results) / len(results)) if results else 0
-        st.markdown(f"### ✅ Match Score: **{score}%**")
-        for metric, value, rule, passed in results:
+        total_weight = sum(r[3] for r in results)
+        passed_weight = sum(r[3] for r in results if r[4])
+        score = int((passed_weight / total_weight) * 100) if total_weight else 0
+        st.markdown(f"### ✅ Weighted Match Score: **{score}%**")
+        for metric, value, rule, weight, passed in results:
             icon = "✅" if passed else "❌"
-            st.write(f"{icon} {metric}: {value} (Rule: {rule})")
+            st.write(f"{icon} {metric}: {value} (Rule: {rule}, Weight: {weight}%)")
 
         company_name = metric_inputs.get("Current Price", "")
         if company_name:
