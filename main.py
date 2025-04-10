@@ -45,6 +45,13 @@ def parse_screener_excel(uploaded_file):
     sheets = xls.sheet_names
     metrics = {}
     missing = []
+    company_name = "Unknown Company"
+
+    if "Data Sheet" in sheets:
+        meta = xls.parse("Data Sheet")
+        first_cell = str(meta.columns[1]) if len(meta.columns) > 1 else None
+        if first_cell and first_cell.strip() != "Unnamed: 1":
+            company_name = first_cell.strip()
 
     for sheet_name in sheets:
         df = xls.parse(sheet_name)
@@ -68,7 +75,7 @@ def parse_screener_excel(uploaded_file):
                 if metric not in metrics:
                     missing.append(metric)
 
-    return metrics, missing
+    return company_name, metrics, missing
 
 # --- Evaluate Rules ---
 def evaluate_rule(value, rule_str):
@@ -175,13 +182,13 @@ with st.sidebar:
 # Main logic
 if uploaded_file:
     with st.spinner("Parsing Excel file..."):
-        metrics, missing = parse_screener_excel(uploaded_file)
+        company_name, metrics, missing = parse_screener_excel(uploaded_file)
 
     if missing:
         st.error(f"⚠️ Missing key metrics in the file: {', '.join(missing)}")
         st.info("Please re-download the Excel from Screener with all data points.")
     else:
-        st.success("All required metrics found!")
+        st.success(f"All required metrics found for **{company_name}**!")
         st.subheader("📈 Extracted Key Financial Trends")
         for key in metrics:
             plot_metric_trend(key, metrics[key])
@@ -204,4 +211,4 @@ if uploaded_file:
             status = "📉 Undervalued" if r[3] else "💰 Overvalued"
             st.write(f"{r[0]}: Latest = {r[1]}, Rule = {r[2]} → {status}")
 
-        fetch_news("Reliance Industries")
+        fetch_news(company_name)
