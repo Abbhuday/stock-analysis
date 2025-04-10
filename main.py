@@ -10,20 +10,10 @@ import re
 # ---------------------- CONFIG ----------------------
 RULES_FILE = "saved_rules.json"
 
-REQUIRED_METRICS = [
-    "Price to Earning",
-    "Net Profit",
-    "OPM"
-]
-
-OPTIONAL_METRICS = [
-    "Return on equity",
-    "Debt to equity",
-    "Return on capital employed",
-    "Profit growth",
-    "Industry PE",
-    "Dividend yield",
-    "Sales growth"
+METRICS_TO_TRACK = [
+    "Price to Earning", "Return on equity", "Market Capitalization", "Sales growth",
+    "Dividend yield", "Return on capital employed", "OPM", "Net Profit",
+    "Debt to equity", "Industry PE", "Profit growth"
 ]
 
 METRIC_ALIASES = {
@@ -99,25 +89,6 @@ def extract_metrics(xls):
 
     return company_name, found
 
-# ---------------------- PEER COMPARISON PARSER ----------------------
-def parse_peer_comparison(pasted_text):
-    lines = pasted_text.strip().split("\n")
-    if len(lines) < 2:
-        return {}
-
-    header = lines[0].split("\t")
-    values = lines[1].split("\t")
-    peer_data = dict(zip(header, values))
-    mapped = {}
-    for key, aliases in METRIC_ALIASES.items():
-        for col in header:
-            col_clean = col.lower().strip()
-            if any(alias in col_clean for alias in aliases):
-                val = peer_data.get(col)
-                if val:
-                    mapped[key] = {"years": ["Peer"], "values": [val]}
-    return mapped
-
 # ---------------------- EVALUATION ----------------------
 def evaluate_rule(val, rule):
     try:
@@ -169,8 +140,6 @@ st.title("📊 In-Depth Stock Analysis (India)")
 
 rules = load_rules()
 file = st.file_uploader("Upload Screener Excel File", type="xlsx")
-pasted_text = st.text_area("📋 Paste the first 2 lines from the Peer Comparison table (copy from Screener.in)",
-                           placeholder="S.No.\tName\tCMP Rs.\tP/E\tMar Cap Rs.Cr.\tDiv Yld %\tROCE %\tOPM %\tPAT 12M Rs.Cr.\tDebt / Eq\tROE %\tSales growth %\tInd PE\tProfit growth %\n1.\tReliance Industr\t1185.35\t23.18\t1604059.38\t0.42\t9.61\t17.46\t69192.00\t0.44\t9.25\t7.12\t21.17\t-0.98")
 
 # Sidebar Rules
 with st.sidebar:
@@ -184,6 +153,18 @@ with st.sidebar:
         save_rules(rules)
         st.success("Rules saved!")
 
+user_inputs = {}
+
+st.markdown("---")
+st.markdown("### ✍️ If data is missing from the Excel, manually enter below:")
+for metric in METRICS_TO_TRACK:
+    val = st.text_input(f"{metric}", "")
+    if val.strip():
+        user_inputs[metric] = {
+            "years": ["Manual"],
+            "values": [val.strip()]
+        }
+
 # Main App
 combined_metrics = {}
 if file:
@@ -191,12 +172,13 @@ if file:
         xls = pd.ExcelFile(file)
         company, extracted_metrics = extract_metrics(xls)
         combined_metrics.update(extracted_metrics)
+        if not company:
+            company = "Uploaded"
 else:
-    company = "Uploaded"
+    company = "User Input"
 
-if pasted_text.strip():
-    pasted_metrics = parse_peer_comparison(pasted_text)
-    combined_metrics.update(pasted_metrics)
+if user_inputs:
+    combined_metrics.update(user_inputs)
 
 if combined_metrics:
     st.success(f"Parsed data for: **{company}**")
@@ -218,4 +200,4 @@ if combined_metrics:
 
     fetch_news(company)
 else:
-    st.warning("Please upload an Excel file or paste Peer Comparison data to continue.")
+    st.warning("Please upload an Excel file or fill in manual data to continue.")
