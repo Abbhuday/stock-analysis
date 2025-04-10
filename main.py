@@ -11,15 +11,14 @@ import re
 RULES_FILE = "saved_rules.json"
 
 METRIC_ALIASES = {
-    "Price to Earning": ["price to earning", "p/e", "p/e ratio"],
+    "Price to Earning": ["price to earning", "p/e"],
     "Return on equity": ["return on equity", "roe"],
     "Market Capitalization": ["market capitalization", "market cap"],
     "Sales growth": ["sales growth"],
     "Dividend yield": ["dividend yield"],
-    "Net Profit latest quarter": ["net profit latest quarter"],
     "Return on capital employed": ["roce", "return on capital employed"],
     "OPM": ["opm", "operating profit margin"],
-    "Profit after tax": ["profit after tax", "pat"],
+    "Profit after tax": ["net profit", "profit after tax", "pat"],
     "Debt to equity": ["debt to equity", "d/e"],
     "Industry PE": ["industry pe", "industry p/e"],
     "Profit growth": ["profit growth"]
@@ -53,39 +52,39 @@ def save_rules(rules):
 
 # ---------------------- PARSER ----------------------
 def extract_metrics(xls):
-    sheets = xls.sheet_names
     found = {}
     missing = []
     company_name = "Unknown Company"
 
-    if "Data Sheet" in sheets:
+    if "Data Sheet" in xls.sheet_names:
         meta = xls.parse("Data Sheet")
         try:
-            first_col = meta.columns[1]
-            if str(first_col).strip() != "Unnamed: 1":
-                company_name = str(first_col).strip()
+            name = meta.columns[1]
+            if str(name).strip().lower() != "unnamed: 1":
+                company_name = str(name).strip()
         except:
             pass
 
-    for sheet in sheets:
-        df = xls.parse(sheet).dropna(how='all').dropna(axis=1, how='all')
-        for label, variants in METRIC_ALIASES.items():
-            if label in found:
-                continue
-            for i in range(len(df)):
-                row_label = str(df.iloc[i, 0]).lower()
-                if any(re.search(v, row_label) for v in variants):
-                    try:
-                        row_vals = df.iloc[i, 1:].dropna().values[-5:].tolist()
-                        col_years = df.columns[1:1+len(row_vals)].astype(str).tolist()
-                        found[label] = {"years": col_years, "values": row_vals}
-                        break
-                    except:
+    for sheet in xls.sheet_names:
+        df = xls.parse(sheet).fillna("")
+        for row in df.values:
+            for i, cell in enumerate(row):
+                cell_str = str(cell).strip().lower()
+                for metric, aliases in METRIC_ALIASES.items():
+                    if metric in found:
                         continue
+                    if any(alias in cell_str for alias in aliases):
+                        values = list(row[i+1:i+6]) if i+1 < len(row) else []
+                        values = [v for v in values if str(v).strip() != ""]
+                        if values:
+                            found[metric] = {
+                                "years": [f"Year {j+1}" for j in range(len(values))],
+                                "values": values
+                            }
 
-    for k in METRIC_ALIASES:
-        if k not in found:
-            missing.append(k)
+    for key in METRIC_ALIASES:
+        if key not in found:
+            missing.append(key)
 
     return company_name, found, missing
 
@@ -131,7 +130,7 @@ def fetch_news(company):
             links = [a for a in soup.find_all('a', href=True) if len(a.text.strip()) > 30 and company.split()[0].lower() in a.text.lower()]
             for link in links[:5]:
                 st.markdown(f"- [{link.text.strip()}]({link['href']})")
-        except Exception as e:
+        except:
             st.warning(f"Could not fetch news from {name}")
 
 # ---------------------- STREAMLIT APP ----------------------
