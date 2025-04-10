@@ -6,7 +6,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image
-import pytesseract
+import easyocr
 import tempfile
 import re
 
@@ -34,11 +34,13 @@ NEWS_SOURCES = {
 
 # ---------------------- OCR UTILS ----------------------
 def extract_from_image(uploaded_image):
+    reader = easyocr.Reader(['en'], gpu=False)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         image = Image.open(uploaded_image).convert('L')
         image.save(tmp_file.name)
-        raw_text = pytesseract.image_to_string(image)
-    return raw_text.splitlines()
+        result = reader.readtext(tmp_file.name, detail=0, paragraph=False)
+    text_lines = [r for r in result if len(r.split()) > 3]
+    return text_lines[:2]  # Expect header + first row
 
 # ---------------------- EVALUATION ----------------------
 def evaluate_rule(val, rule):
@@ -91,15 +93,14 @@ company_name = ""
 if uploaded_image:
     with st.spinner("🔍 Extracting text from image..."):
         lines = extract_from_image(uploaded_image)
-        lines = [l for l in lines if l.strip() != ""]
         if len(lines) >= 2:
-            header = lines[0].split("\t")
+            headers = lines[0].split("\t")
             values = lines[1].split("\t")
             if values:
                 company_name = values[1] if len(values) > 1 else ""
-            table = dict(zip(header, values))
+            table = dict(zip(headers, values))
             for label, abbrev in REQUIRED_METRICS.items():
-                for col in header:
+                for col in headers:
                     if abbrev.lower() in col.lower():
                         ocr_data[label] = table.get(col, "")
 
