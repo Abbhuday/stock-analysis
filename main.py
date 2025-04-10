@@ -41,16 +41,7 @@ def load_rules():
     if os.path.exists(RULES_FILE):
         with open(RULES_FILE, 'r') as f:
             return json.load(f)
-    return {
-        "buy_rules": {
-            "Return on equity": "> 15",
-            "Debt to equity": "< 1"
-        },
-        "valuation_rules": {
-            "Price to Earning": "< 20",
-            "Industry PE": "< 30"
-        }
-    }
+    return {"buy_rules": {}, "valuation_rules": {}, "omit_metrics": []}
 
 def save_rules(rules):
     with open(RULES_FILE, 'w') as f:
@@ -60,7 +51,6 @@ def save_rules(rules):
 def extract_metrics(xls):
     found = {}
     company_name = "Unknown Company"
-
     if "Data Sheet" in xls.sheet_names:
         meta = xls.parse("Data Sheet")
         try:
@@ -69,7 +59,6 @@ def extract_metrics(xls):
                 company_name = str(name).strip()
         except:
             pass
-
     for sheet in xls.sheet_names:
         df = xls.parse(sheet).fillna("").astype(str)
         for row in df.values:
@@ -82,11 +71,7 @@ def extract_metrics(xls):
                         values = list(row[i+1:i+6]) if i+1 < len(row) else []
                         values = [v for v in values if str(v).strip() != ""]
                         if values:
-                            found[metric] = {
-                                "years": [f"Year {j+1}" for j in range(len(values))],
-                                "values": values
-                            }
-
+                            found[metric] = {"years": [f"Year {j+1}" for j in range(len(values))], "values": values}
     return company_name, found
 
 # ---------------------- EVALUATION ----------------------
@@ -100,8 +85,14 @@ def evaluate_rule(val, rule):
 
 def evaluate_all(metrics, rules):
     results = {"buy": [], "valuation": []}
+    omitted = rules.get("omit_metrics", [])
     for rtype in results:
-        for key, rule in rules[f"{rtype}_rules"].items():
+        for key in METRICS_TO_TRACK:
+            if key in omitted:
+                continue
+            rule = rules[f"{rtype}_rules"].get(key, "")
+            if not rule.strip():
+                continue
             if key in metrics:
                 try:
                     val = float(metrics[key]["values"][-1])
@@ -141,29 +132,31 @@ st.title("📊 In-Depth Stock Analysis (India)")
 rules = load_rules()
 file = st.file_uploader("Upload Screener Excel File", type="xlsx")
 
-# Sidebar Rules
+# Sidebar Rules with toggles and input fields
 with st.sidebar:
-    st.header("📋 Buy/Sell Rules")
-    for k in rules["buy_rules"]:
-        rules["buy_rules"][k] = st.text_input(f"Buy Rule - {k}", rules["buy_rules"][k])
-    st.header("📉 Valuation Rules")
-    for k in rules["valuation_rules"]:
-        rules["valuation_rules"][k] = st.text_input(f"Valuation Rule - {k}", rules["valuation_rules"][k])
+    st.header("⚙️ Buy/Sell & Valuation Rules")
+    st.caption("✅ Tick to include, enter rule (e.g., > 15)")
+    omit_list = []
+    for metric in METRICS_TO_TRACK:
+        cols = st.columns([2, 2, 1])
+        rules["buy_rules"][metric] = cols[0].text_input(f"Buy - {metric}", value=rules["buy_rules"].get(metric, ""), key=f"buy_{metric}")
+        rules["valuation_rules"][metric] = cols[1].text_input(f"Val - {metric}", value=rules["valuation_rules"].get(metric, ""), key=f"val_{metric}")
+        if not cols[2].checkbox("✔", value=metric not in rules.get("omit_metrics", []), key=f"toggle_{metric}"):
+            omit_list.append(metric)
+    rules["omit_metrics"] = omit_list
     if st.button("💾 Save Rules"):
         save_rules(rules)
         st.success("Rules saved!")
 
+# Manual Inputs
+st.markdown("### ✍️ Manual Entry (if data missing from Excel)")
 user_inputs = {}
-
-st.markdown("---")
-st.markdown("### ✍️ If data is missing from the Excel, manually enter below:")
-for metric in METRICS_TO_TRACK:
-    val = st.text_input(f"{metric}", "")
+input_cols = st.columns(3)
+for idx, metric in enumerate(METRICS_TO_TRACK):
+    col = input_cols[idx % 3]
+    val = col.text_input(f"{metric}", "", key=f"manual_{metric}")
     if val.strip():
-        user_inputs[metric] = {
-            "years": ["Manual"],
-            "values": [val.strip()]
-        }
+        user_inputs[metric] = {"years": ["Manual"], "values": [val.strip()]}
 
 # Main App
 combined_metrics = {}
@@ -172,8 +165,6 @@ if file:
         xls = pd.ExcelFile(file)
         company, extracted_metrics = extract_metrics(xls)
         combined_metrics.update(extracted_metrics)
-        if not company:
-            company = "Uploaded"
 else:
     company = "User Input"
 
