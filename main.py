@@ -5,8 +5,8 @@ import json
 import os
 import requests
 from bs4 import BeautifulSoup
-import easyocr
 from PIL import Image
+import pytesseract
 import tempfile
 import re
 
@@ -34,13 +34,11 @@ NEWS_SOURCES = {
 
 # ---------------------- OCR UTILS ----------------------
 def extract_from_image(uploaded_image):
-    reader = easyocr.Reader(['en'], gpu=False)
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-        image = Image.open(uploaded_image)
+        image = Image.open(uploaded_image).convert('L')
         image.save(tmp_file.name)
-        result = reader.readtext(tmp_file.name, detail=0, paragraph=False)
-    rows = [r[1] for r in result if len(r[1].split()) >= 3]
-    return rows[:2]  # Header and first company row
+        raw_text = pytesseract.image_to_string(image)
+    return raw_text.splitlines()
 
 # ---------------------- EVALUATION ----------------------
 def evaluate_rule(val, rule):
@@ -84,44 +82,42 @@ def fetch_news(company):
 st.set_page_config("Stock Evaluation Tool", layout="wide")
 st.title("📊 In-Depth Indian Stock Analysis")
 
-# Manual inputs section
-st.subheader("📥 Manually Enter Financial Metrics")
-manual_inputs = {}
-cols = st.columns(3)
-for idx, (label, _) in enumerate(REQUIRED_METRICS.items()):
-    val = cols[idx % 3].text_input(f"{label}", key=f"manual_{label}")
-    if val:
-        manual_inputs[label] = val
-
-# OCR upload
-st.markdown("---")
+# OCR upload above form
 st.subheader("📸 Upload Screenshot of Peer Comparison Table")
 uploaded_image = st.file_uploader("Upload screenshot (PNG/JPG)", type=["png", "jpg", "jpeg"])
 ocr_data = {}
 company_name = ""
+
 if uploaded_image:
     with st.spinner("🔍 Extracting text from image..."):
-        rows = extract_from_image(uploaded_image)
-        if len(rows) >= 2:
-            headers = rows[0].split("\t")
-            values = rows[1].split("\t")
+        lines = extract_from_image(uploaded_image)
+        lines = [l for l in lines if l.strip() != ""]
+        if len(lines) >= 2:
+            header = lines[0].split("\t")
+            values = lines[1].split("\t")
             if values:
-                company_name = values[1]  # assume 2nd column is name
-            table = dict(zip(headers, values))
+                company_name = values[1] if len(values) > 1 else ""
+            table = dict(zip(header, values))
             for label, abbrev in REQUIRED_METRICS.items():
-                for col in headers:
+                for col in header:
                     if abbrev.lower() in col.lower():
                         ocr_data[label] = table.get(col, "")
 
-# Merge data
-metrics = manual_inputs.copy()
-metrics.update(ocr_data)
+# Enter Financial Metrics section
+st.subheader("📥 Enter Financial Metrics")
+metric_inputs = {}
+cols = st.columns(3)
+for idx, (label, _) in enumerate(REQUIRED_METRICS.items()):
+    default = ocr_data.get(label, "")
+    val = cols[idx % 3].text_input(f"{label}", value=default, key=f"manual_{label}")
+    if val:
+        metric_inputs[label] = val
 
-# Evaluation trigger
+# Evaluate button
 st.markdown("---")
 if st.button("✅ Evaluate"):
-    if len(metrics) < len(REQUIRED_METRICS):
-        missing = [k for k in REQUIRED_METRICS if k not in metrics or not metrics[k]]
+    if len(metric_inputs) < len(REQUIRED_METRICS):
+        missing = [k for k in REQUIRED_METRICS if k not in metric_inputs or not metric_inputs[k]]
         st.error(f"❌ Missing data for: {', '.join(missing)}")
     else:
         st.success("All required metrics available. Proceeding with evaluation.")
@@ -136,7 +132,7 @@ if st.button("✅ Evaluate"):
                     rule_inputs[label] = rule_val
 
         st.subheader("📈 Evaluation Results")
-        results = evaluate_all(metrics, rule_inputs)
+        results = evaluate_all(metric_inputs, rule_inputs)
         score = int(100 * sum(r[3] for r in results) / len(results)) if results else 0
         st.markdown(f"### ✅ Match Score: **{score}%**")
         for metric, value, rule, passed in results:
@@ -147,4 +143,4 @@ if st.button("✅ Evaluate"):
             st.markdown("---")
             fetch_news(company_name)
         else:
-            st.info("📌 Enter a company name in the Peer Comparison or manually to fetch related news.")
+            st.info("📌 Enter a company name in the Peer Comparison to fetch related news.")
