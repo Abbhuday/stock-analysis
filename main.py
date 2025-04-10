@@ -38,9 +38,9 @@ def extract_from_image(uploaded_image):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
         image = Image.open(uploaded_image)
         image.save(tmp_file.name)
-        result = reader.readtext(tmp_file.name, detail=0, paragraph=True)
-    text = " ".join(result)
-    return text
+        result = reader.readtext(tmp_file.name, detail=0, paragraph=False)
+    rows = [r[1] for r in result if len(r[1].split()) >= 3]
+    return rows[:2]  # Header and first company row
 
 # ---------------------- EVALUATION ----------------------
 def evaluate_rule(val, rule):
@@ -82,12 +82,9 @@ def fetch_news(company):
 
 # ---------------------- STREAMLIT APP ----------------------
 st.set_page_config("Stock Evaluation Tool", layout="wide")
-st.title("📊 In-Depth Stock Analysis (India) — Peer Comparison Based")
+st.title("📊 In-Depth Indian Stock Analysis")
 
-# Company name input
-company_name = st.text_input("🏷️ Company Name (for news fetch)", "")
-
-# Manual entry layout
+# Manual inputs section
 st.subheader("📥 Manually Enter Financial Metrics")
 manual_inputs = {}
 cols = st.columns(3)
@@ -96,49 +93,50 @@ for idx, (label, _) in enumerate(REQUIRED_METRICS.items()):
     if val:
         manual_inputs[label] = val
 
-# OCR from image
+# OCR upload
 st.markdown("---")
 st.subheader("📸 Upload Screenshot of Peer Comparison Table")
 uploaded_image = st.file_uploader("Upload screenshot (PNG/JPG)", type=["png", "jpg", "jpeg"])
 ocr_data = {}
+company_name = ""
 if uploaded_image:
     with st.spinner("🔍 Extracting text from image..."):
-        raw_text = extract_from_image(uploaded_image)
-        for label, abbrev in REQUIRED_METRICS.items():
-            for line in raw_text.split(" "):
-                if abbrev.lower() in line.lower():
-                    try:
-                        value = re.findall(r"\d+\.\d+|\d+", line)
-                        if value:
-                            ocr_data[label] = value[0]
-                    except:
-                        continue
+        rows = extract_from_image(uploaded_image)
+        if len(rows) >= 2:
+            headers = rows[0].split("\t")
+            values = rows[1].split("\t")
+            if values:
+                company_name = values[1]  # assume 2nd column is name
+            table = dict(zip(headers, values))
+            for label, abbrev in REQUIRED_METRICS.items():
+                for col in headers:
+                    if abbrev.lower() in col.lower():
+                        ocr_data[label] = table.get(col, "")
 
-# Merge manual with OCR (OCR takes precedence)
+# Merge data
 metrics = manual_inputs.copy()
 metrics.update(ocr_data)
 
-# Rule input section
-st.markdown("---")
-st.subheader("⚙️ Set Evaluation Criteria")
-rules = {}
-cols = st.columns(3)
-for idx, label in enumerate(REQUIRED_METRICS):
-    rule_val = cols[idx % 3].text_input(f"{label} Rule", key=f"rule_{label}", value="")
-    if rule_val:
-        rules[label] = rule_val
-
-# Evaluate button
+# Evaluation trigger
 st.markdown("---")
 if st.button("✅ Evaluate"):
     if len(metrics) < len(REQUIRED_METRICS):
-        missing = [k for k in REQUIRED_METRICS if k not in metrics]
+        missing = [k for k in REQUIRED_METRICS if k not in metrics or not metrics[k]]
         st.error(f"❌ Missing data for: {', '.join(missing)}")
     else:
         st.success("All required metrics available. Proceeding with evaluation.")
 
+        # Evaluation criteria in sidebar after button click
+        with st.sidebar:
+            st.header("📋 Set Evaluation Rules")
+            rule_inputs = {}
+            for label in REQUIRED_METRICS:
+                rule_val = st.text_input(f"{label} Rule", key=f"rule_{label}", value="")
+                if rule_val:
+                    rule_inputs[label] = rule_val
+
         st.subheader("📈 Evaluation Results")
-        results = evaluate_all(metrics, rules)
+        results = evaluate_all(metrics, rule_inputs)
         score = int(100 * sum(r[3] for r in results) / len(results)) if results else 0
         st.markdown(f"### ✅ Match Score: **{score}%**")
         for metric, value, rule, passed in results:
@@ -149,4 +147,4 @@ if st.button("✅ Evaluate"):
             st.markdown("---")
             fetch_news(company_name)
         else:
-            st.info("📌 Enter a company name above to fetch related news.")
+            st.info("📌 Enter a company name in the Peer Comparison or manually to fetch related news.")
