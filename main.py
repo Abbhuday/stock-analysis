@@ -14,17 +14,15 @@ METRIC_ALIASES = {
     "Price to Earning": ["price to earning", "p/e", "p/e ratio"],
     "Return on equity": ["return on equity", "roe"],
     "Market Capitalization": ["market capitalization", "market cap"],
-    "Free cash flow 3years": ["free cash flow 3years", "fcf 3y"],
-    "Dividend yield": ["dividend yield"],
     "Sales growth": ["sales growth"],
+    "Dividend yield": ["dividend yield"],
     "Net Profit latest quarter": ["net profit latest quarter"],
     "Return on capital employed": ["roce", "return on capital employed"],
     "OPM": ["opm", "operating profit margin"],
     "Profit after tax": ["profit after tax", "pat"],
     "Debt to equity": ["debt to equity", "d/e"],
     "Industry PE": ["industry pe", "industry p/e"],
-    "Profit growth": ["profit growth"],
-    "Free cash flow last year": ["free cash flow last year", "fcf last year"]
+    "Profit growth": ["profit growth"]
 }
 
 NEWS_SOURCES = {
@@ -60,7 +58,6 @@ def extract_metrics(xls):
     missing = []
     company_name = "Unknown Company"
 
-    # Detect company name
     if "Data Sheet" in sheets:
         meta = xls.parse("Data Sheet")
         try:
@@ -70,7 +67,6 @@ def extract_metrics(xls):
         except:
             pass
 
-    # Search across sheets
     for sheet in sheets:
         df = xls.parse(sheet).dropna(how='all').dropna(axis=1, how='all')
         for label, variants in METRIC_ALIASES.items():
