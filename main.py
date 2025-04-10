@@ -5,10 +5,6 @@ import json
 import os
 import requests
 from bs4 import BeautifulSoup
-from PIL import Image
-import easyocr
-import tempfile
-import re
 
 # ---------------------- CONFIG ----------------------
 REQUIRED_METRICS = {
@@ -31,16 +27,6 @@ NEWS_SOURCES = {
     "Mint": "https://www.livemint.com/Search/Link/Keyword/{}",
     "Business Standard": "https://www.business-standard.com/search?q={}"
 }
-
-# ---------------------- OCR UTILS ----------------------
-def extract_from_image(uploaded_image):
-    reader = easyocr.Reader(['en'], gpu=False)
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_file:
-        image = Image.open(uploaded_image).convert('L')
-        image.save(tmp_file.name)
-        result = reader.readtext(tmp_file.name, detail=0, paragraph=False)
-    text_lines = [r for r in result if len(r.split()) > 3]
-    return text_lines[:2]  # Expect header + first row
 
 # ---------------------- EVALUATION ----------------------
 def evaluate_rule(val, rule):
@@ -84,39 +70,24 @@ def fetch_news(company):
 st.set_page_config("Stock Evaluation Tool", layout="wide")
 st.title("📊 In-Depth Indian Stock Analysis")
 
-# OCR upload above form
-st.subheader("📸 Upload Screenshot of Peer Comparison Table")
-uploaded_image = st.file_uploader("Upload screenshot (PNG/JPG)", type=["png", "jpg", "jpeg"])
-ocr_data = {}
-company_name = ""
-
-if uploaded_image:
-    with st.spinner("🔍 Extracting text from image..."):
-        lines = extract_from_image(uploaded_image)
-        if len(lines) >= 2:
-            headers = lines[0].split("\t")
-            values = lines[1].split("\t")
-            if values:
-                company_name = values[1] if len(values) > 1 else ""
-            table = dict(zip(headers, values))
-            for label, abbrev in REQUIRED_METRICS.items():
-                for col in headers:
-                    if abbrev.lower() in col.lower():
-                        ocr_data[label] = table.get(col, "")
-
 # Enter Financial Metrics section
 st.subheader("📥 Enter Financial Metrics")
+st.markdown("**Use [Screener.in](https://www.screener.in) for finding the below financial metrics**")
 metric_inputs = {}
 cols = st.columns(3)
 for idx, (label, _) in enumerate(REQUIRED_METRICS.items()):
-    default = ocr_data.get(label, "")
-    val = cols[idx % 3].text_input(f"{label}", value=default, key=f"manual_{label}")
-    if val:
-        metric_inputs[label] = val
+    with cols[idx % 3]:
+        st.markdown(f"<label style='font-size:16px; font-weight:600'>{label}</label>", unsafe_allow_html=True)
+        val = st.text_input(" ", key=f"manual_{label}")
+        if val:
+            metric_inputs[label] = val
 
 # Evaluate button
-st.markdown("---")
-if st.button("✅ Evaluate"):
+st.markdown("<div style='text-align:center; margin-top:2rem;'>", unsafe_allow_html=True)
+run_eval = st.button("✅ EVALUATE", type="primary")
+st.markdown("</div>", unsafe_allow_html=True)
+
+if run_eval:
     if len(metric_inputs) < len(REQUIRED_METRICS):
         missing = [k for k in REQUIRED_METRICS if k not in metric_inputs or not metric_inputs[k]]
         st.error(f"❌ Missing data for: {', '.join(missing)}")
@@ -140,8 +111,9 @@ if st.button("✅ Evaluate"):
             icon = "✅" if passed else "❌"
             st.write(f"{icon} {metric}: {value} (Rule: {rule})")
 
+        company_name = metric_inputs.get("Current Price", "")
         if company_name:
             st.markdown("---")
             fetch_news(company_name)
         else:
-            st.info("📌 Enter a company name in the Peer Comparison to fetch related news.")
+            st.info("📌 Enter a company name above to fetch related news.")
