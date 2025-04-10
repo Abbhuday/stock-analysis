@@ -10,8 +10,20 @@ from bs4 import BeautifulSoup
 # --- Configuration ---
 RULES_FILE = "saved_rules.json"
 REQUIRED_METRICS = [
-    "EPS", "ROE", "ROCE", "Debt to Equity", "Promoter Holding", "FII Holding", "DII Holding",
-    "Dividend Payout", "Net Profit", "Revenue"
+    "Price to Earning",
+    "Return on equity",
+    "Market Capitalization",
+    "Free cash flow 3years",
+    "Dividend yield",
+    "Sales growth",
+    "Net Profit latest quarter",
+    "Return on capital employed",
+    "OPM",
+    "Profit after tax",
+    "Debt to equity",
+    "Industry PE",
+    "Profit growth",
+    "Free cash flow last year"
 ]
 NEWS_SOURCES = {
     "Economic Times": "https://economictimes.indiatimes.com/topic/{}",
@@ -26,12 +38,12 @@ def load_rules():
             return json.load(f)
     return {
         "buy_rules": {
-            "ROE": "> 15",
-            "Debt to Equity": "< 1"
+            "Return on equity": "> 15",
+            "Debt to equity": "< 1"
         },
         "valuation_rules": {
-            "P/E": "< 20",
-            "P/B": "< 3"
+            "Price to Earning": "< 20",
+            "Industry PE": "< 30"
         }
     }
 
@@ -206,7 +218,7 @@ if uploaded_file:
             st.write(f"{status} {r[0]}: Latest = {r[1]}, Rule = {r[2]}")
 
         st.markdown("---")
-        st.markdown(f"### Valuation Check")
+        st.markdown("### Valuation Check")
         for r in results["valuation"]:
             status = "📉 Undervalued" if r[3] else "💰 Overvalued"
             st.write(f"{r[0]}: Latest = {r[1]}, Rule = {r[2]} → {status}")
