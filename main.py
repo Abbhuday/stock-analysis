@@ -10,15 +10,31 @@ import re
 # ---------------------- CONFIG ----------------------
 RULES_FILE = "saved_rules.json"
 
+REQUIRED_METRICS = [
+    "Price to Earning",
+    "Net Profit",
+    "OPM"
+]
+
+OPTIONAL_METRICS = [
+    "Return on equity",
+    "Debt to equity",
+    "Return on capital employed",
+    "Profit growth",
+    "Industry PE",
+    "Dividend yield",
+    "Sales growth"
+]
+
 METRIC_ALIASES = {
     "Price to Earning": ["price to earning", "p/e"],
     "Return on equity": ["return on equity", "roe"],
     "Market Capitalization": ["market capitalization", "market cap"],
     "Sales growth": ["sales growth"],
-    "Dividend yield": ["dividend yield"],
+    "Dividend yield": ["dividend yield", "div yld"],
     "Return on capital employed": ["roce", "return on capital employed"],
     "OPM": ["opm", "operating profit margin"],
-    "Profit after tax": ["net profit", "profit after tax", "pat"],
+    "Net Profit": ["net profit", "pat"],
     "Debt to equity": ["debt to equity", "d/e"],
     "Industry PE": ["industry pe", "industry p/e"],
     "Profit growth": ["profit growth"]
@@ -53,7 +69,6 @@ def save_rules(rules):
 # ---------------------- PARSER ----------------------
 def extract_metrics(xls):
     found = {}
-    missing = []
     company_name = "Unknown Company"
 
     if "Data Sheet" in xls.sheet_names:
@@ -66,10 +81,10 @@ def extract_metrics(xls):
             pass
 
     for sheet in xls.sheet_names:
-        df = xls.parse(sheet).fillna("")
+        df = xls.parse(sheet).fillna("").astype(str)
         for row in df.values:
             for i, cell in enumerate(row):
-                cell_str = str(cell).strip().lower()
+                cell_str = cell.lower().strip()
                 for metric, aliases in METRIC_ALIASES.items():
                     if metric in found:
                         continue
@@ -82,11 +97,26 @@ def extract_metrics(xls):
                                 "values": values
                             }
 
-    for key in METRIC_ALIASES:
-        if key not in found:
-            missing.append(key)
+    return company_name, found
 
-    return company_name, found, missing
+# ---------------------- PEER COMPARISON PARSER ----------------------
+def parse_peer_comparison(pasted_text):
+    lines = pasted_text.strip().split("\n")
+    if len(lines) < 2:
+        return {}
+
+    header = lines[0].split("\t")
+    values = lines[1].split("\t")
+    peer_data = dict(zip(header, values))
+    mapped = {}
+    for key, aliases in METRIC_ALIASES.items():
+        for col in header:
+            col_clean = col.lower().strip()
+            if any(alias in col_clean for alias in aliases):
+                val = peer_data.get(col)
+                if val:
+                    mapped[key] = {"years": ["Peer"], "values": [val]}
+    return mapped
 
 # ---------------------- EVALUATION ----------------------
 def evaluate_rule(val, rule):
@@ -139,6 +169,8 @@ st.title("📊 In-Depth Stock Analysis (India)")
 
 rules = load_rules()
 file = st.file_uploader("Upload Screener Excel File", type="xlsx")
+pasted_text = st.text_area("📋 Paste the first 2 lines from the Peer Comparison table (copy from Screener.in)",
+                           placeholder="S.No.\tName\tCMP Rs.\tP/E\tMar Cap Rs.Cr.\tDiv Yld %\tROCE %\tOPM %\tPAT 12M Rs.Cr.\tDebt / Eq\tROE %\tSales growth %\tInd PE\tProfit growth %\n1.\tReliance Industr\t1185.35\t23.18\t1604059.38\t0.42\t9.61\t17.46\t69192.00\t0.44\t9.25\t7.12\t21.17\t-0.98")
 
 # Sidebar Rules
 with st.sidebar:
@@ -153,29 +185,37 @@ with st.sidebar:
         st.success("Rules saved!")
 
 # Main App
+combined_metrics = {}
 if file:
     with st.spinner("Processing Excel file..."):
         xls = pd.ExcelFile(file)
-        company, metrics, missing = extract_metrics(xls)
+        company, extracted_metrics = extract_metrics(xls)
+        combined_metrics.update(extracted_metrics)
+else:
+    company = "Uploaded"
 
-    if missing:
-        st.error("⚠️ Missing key metrics in the file: " + ", ".join(set(missing)))
-    else:
-        st.success(f"Parsed data for: **{company}**")
-        st.subheader("📈 Financial Trend Visualizations")
-        for k in metrics:
-            plot_metric(k, metrics[k])
+if pasted_text.strip():
+    pasted_metrics = parse_peer_comparison(pasted_text)
+    combined_metrics.update(pasted_metrics)
 
-        st.subheader("📌 Buy/Sell Evaluation")
-        results = evaluate_all(metrics, rules)
-        score = int(100 * sum(x[3] for x in results['buy']) / len(results['buy'])) if results['buy'] else 0
-        st.markdown(f"### ✅ Buy Score: **{score}%**")
-        for k, v, r, ok in results['buy']:
-            st.write(f"{'✅' if ok else '❌'} {k}: {v} (Rule: {r})")
+if combined_metrics:
+    st.success(f"Parsed data for: **{company}**")
+    st.subheader("📈 Financial Trend Visualizations")
+    for k in combined_metrics:
+        plot_metric(k, combined_metrics[k])
 
-        st.markdown("---")
-        st.markdown("### 💰 Valuation Tags")
-        for k, v, r, ok in results['valuation']:
-            st.write(f"{k}: {v} (Rule: {r}) → {'📉 Undervalued' if ok else '💰 Overvalued'}")
+    st.subheader("📌 Buy/Sell Evaluation")
+    results = evaluate_all(combined_metrics, rules)
+    score = int(100 * sum(x[3] for x in results['buy']) / len(results['buy'])) if results['buy'] else 0
+    st.markdown(f"### ✅ Buy Score: **{score}%**")
+    for k, v, r, ok in results['buy']:
+        st.write(f"{'✅' if ok else '❌'} {k}: {v} (Rule: {r})")
 
-        fetch_news(company)
+    st.markdown("---")
+    st.markdown("### 💰 Valuation Tags")
+    for k, v, r, ok in results['valuation']:
+        st.write(f"{k}: {v} (Rule: {r}) → {'📉 Undervalued' if ok else '💰 Overvalued'}")
+
+    fetch_news(company)
+else:
+    st.warning("Please upload an Excel file or paste Peer Comparison data to continue.")
