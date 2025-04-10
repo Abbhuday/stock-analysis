@@ -1,101 +1,207 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
+import plotly.graph_objects as go
+import json
+import os
+import requests
+from bs4 import BeautifulSoup
 
-# --- Helper Functions ---
-def fetch_stock_data(ticker):
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    hist = stock.history(period="5y")
-    return stock, info, hist
+# --- Configuration ---
+RULES_FILE = "saved_rules.json"
+REQUIRED_METRICS = [
+    "EPS", "ROE", "ROCE", "Debt to Equity", "Promoter Holding", "FII Holding", "DII Holding",
+    "Dividend Payout", "Net Profit", "Revenue"
+]
+NEWS_SOURCES = {
+    "Economic Times": "https://economictimes.indiatimes.com/topic/{}",
+    "Mint": "https://www.livemint.com/Search/Link/Keyword/{}",
+    "Business Standard": "https://www.business-standard.com/search?q={}"
+}
 
-def calculate_ratios(info):
-    try:
-        roe = info['returnOnEquity']
-        roa = info['returnOnAssets']
-        gross_margin = info['grossMargins']
-        operating_margin = info['operatingMargins']
-        net_margin = info['netMargins']
-        pe_ratio = info['trailingPE']
-        pb_ratio = info['priceToBook']
-        debt_to_equity = info['debtToEquity']
-        current_ratio = info['currentRatio']
-        return {
-            'ROE': roe,
-            'ROA': roa,
-            'Gross Margin': gross_margin,
-            'Operating Margin': operating_margin,
-            'Net Margin': net_margin,
-            'P/E Ratio': pe_ratio,
-            'P/B Ratio': pb_ratio,
-            'Debt/Equity': debt_to_equity,
-            'Current Ratio': current_ratio
+# --- Load or Initialize Rules ---
+def load_rules():
+    if os.path.exists(RULES_FILE):
+        with open(RULES_FILE, 'r') as f:
+            return json.load(f)
+    return {
+        "buy_rules": {
+            "ROE": "> 15",
+            "Debt to Equity": "< 1"
+        },
+        "valuation_rules": {
+            "P/E": "< 20",
+            "P/B": "< 3"
         }
+    }
+
+def save_rules(rules):
+    with open(RULES_FILE, 'w') as f:
+        json.dump(rules, f)
+
+# --- Screener Excel Parsing ---
+def parse_screener_excel(uploaded_file):
+    xls = pd.ExcelFile(uploaded_file)
+    sheets = xls.sheet_names
+    metrics = {}
+    missing = []
+
+    for sheet_name in sheets:
+        df = xls.parse(sheet_name)
+        df = df.dropna(how='all')
+        if 'Narration' not in df.iloc[:, 0].astype(str).values:
+            continue
+
+        df.columns = df.iloc[1]  # Set second row as header
+        df = df[2:]  # Skip first two rows
+
+        for metric in REQUIRED_METRICS:
+            match = df[df[df.columns[0]].astype(str).str.contains(metric, case=False, na=False)]
+            if not match.empty:
+                values = match.iloc[0, 1:].dropna()
+                try:
+                    years = values.index.astype(str).tolist()
+                except:
+                    years = [f"Year {i+1}" for i in range(len(values))]
+                metrics[metric] = {"years": years, "values": values.tolist()}
+            else:
+                if metric not in metrics:
+                    missing.append(metric)
+
+    return metrics, missing
+
+# --- Evaluate Rules ---
+def evaluate_rule(value, rule_str):
+    try:
+        operator = rule_str.strip()[0:2] if rule_str.strip()[1] in '=<' else rule_str.strip()[0]
+        number = float(rule_str.strip().replace(operator, ''))
+        if operator == '>': return value > number
+        if operator == '<': return value < number
+        if operator == '>=': return value >= number
+        if operator == '<=': return value <= number
+        if operator == '==': return value == number
+        return False
     except:
-        return {}
+        return False
 
-def plot_price_trend(hist):
-    fig, ax = plt.subplots()
-    ax.plot(hist.index, hist['Close'])
-    ax.set_title("Stock Price Trend (5Y)")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price ($)")
-    st.pyplot(fig)
+def evaluate_metrics(metrics, rules):
+    results = {"buy": [], "valuation": []}
+    for key, rule in rules["buy_rules"].items():
+        if key in metrics:
+            try:
+                latest_value = float(metrics[key]["values"][-1])
+                passed = evaluate_rule(latest_value, rule)
+                results["buy"].append((key, latest_value, rule, passed))
+            except:
+                results["buy"].append((key, "N/A", rule, False))
+        else:
+            results["buy"].append((key, "Missing", rule, False))
 
-def display_ratios(ratios):
-    if not ratios:
-        st.warning("Not enough data to display ratios.")
-        return
-    df = pd.DataFrame(list(ratios.items()), columns=["Ratio", "Value"])
-    st.dataframe(df.set_index("Ratio"))
+    for key, rule in rules["valuation_rules"].items():
+        if key in metrics:
+            try:
+                latest_value = float(metrics[key]["values"][-1])
+                passed = evaluate_rule(latest_value, rule)
+                results["valuation"].append((key, latest_value, rule, passed))
+            except:
+                results["valuation"].append((key, "N/A", rule, False))
+        else:
+            results["valuation"].append((key, "Missing", rule, False))
 
-def valuation_score(ratios):
-    score = 0
-    if ratios.get('ROE', 0) > 0.15:
-        score += 1
-    if ratios.get('P/E Ratio', 100) < 20:
-        score += 1
-    if ratios.get('Debt/Equity', 100) < 1:
-        score += 1
-    if ratios.get('Current Ratio', 0) > 1.5:
-        score += 1
-    return score
+    return results
 
-def suggest_action(score):
-    if score >= 3:
-        return ("Buy", "🟢")
-    elif score == 2:
-        return ("Hold", "🟡")
-    else:
-        return ("Sell", "🔴")
+# --- Chart Plotting ---
+def plot_metric_trend(metric_name, data):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=data["years"],
+        y=data["values"],
+        mode='lines+markers',
+        name=metric_name
+    ))
+    fig.update_layout(
+        title=metric_name,
+        xaxis_title="Year",
+        yaxis_title=metric_name,
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+# --- News Fetching ---
+def fetch_news(company):
+    st.subheader(f"📰 News & Sentiment for: {company}")
+    for source, url_template in NEWS_SOURCES.items():
+        url = url_template.format(company.replace(" ", "+"))
+        try:
+            response = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            soup = BeautifulSoup(response.content, 'html.parser')
+            st.markdown(f"**{source}**")
+            links = soup.find_all("a", href=True)
+            shown = 0
+            for link in links:
+                text = link.get_text().strip()
+                href = link['href']
+                if len(text) > 30 and company.split()[0].lower() in text.lower():
+                    st.markdown(f"- [{text}]({href})")
+                    shown += 1
+                if shown >= 5:
+                    break
+        except Exception as e:
+            st.warning(f"Could not fetch news from {source}: {e}")
 
 # --- Streamlit UI ---
-st.set_page_config(page_title="In-Depth Stock Analysis", layout="wide")
-st.title("📈 In-Depth Stock Analysis Tool")
+st.set_page_config(page_title="Indian Stock Analysis Tool", layout="wide")
+st.title("📊 In-Depth Stock Analysis - India Focus")
 
-# Input Section
-ticker = st.text_input("Enter Stock Ticker Symbol (e.g., AAPL, MSFT, TSLA)", "AAPL")
-if ticker:
-    with st.spinner("Fetching data..."):
-        stock, info, hist = fetch_stock_data(ticker)
+# Upload Screener Excel
+uploaded_file = st.file_uploader("Upload Screener.in Excel File", type=["xlsx"])
+rules = load_rules()
 
-    st.subheader(f"Overview: {info.get('shortName', 'N/A')}")
-    st.markdown(f"**Sector:** {info.get('sector', 'N/A')}  ")
-    st.markdown(f"**Industry:** {info.get('industry', 'N/A')}  ")
-    st.markdown(f"**Market Cap:** {info.get('marketCap', 'N/A'):,}  ")
-    st.markdown(f"**Current Price:** ${info.get('currentPrice', 'N/A')}  ")
-    st.markdown(f"**52-Week High/Low:** ${info.get('fiftyTwoWeekHigh', 'N/A')} / ${info.get('fiftyTwoWeekLow', 'N/A')}  ")
+# Rule Editor Sidebar
+with st.sidebar:
+    st.header("⚙️ Buy/Sell Criteria")
+    st.markdown("Define your investment rules")
+    for key in rules["buy_rules"]:
+        rules["buy_rules"][key] = st.text_input(f"Buy Rule - {key}", value=rules["buy_rules"][key])
 
-    st.subheader("📊 Price Trend")
-    plot_price_trend(hist)
+    st.header("📉 Valuation Rules")
+    for key in rules["valuation_rules"]:
+        rules["valuation_rules"][key] = st.text_input(f"Valuation Rule - {key}", value=rules["valuation_rules"][key])
 
-    st.subheader("📈 Key Financial Ratios")
-    ratios = calculate_ratios(info)
-    display_ratios(ratios)
+    if st.button("💾 Save Rules"):
+        save_rules(rules)
+        st.success("Rules saved successfully!")
 
-    st.subheader("📌 Investment Suggestion")
-    score = valuation_score(ratios)
-    suggestion, emoji = suggest_action(score)
-    st.markdown(f"### {emoji} Suggestion: **{suggestion}** (Score: {score}/4)")
+# Main logic
+if uploaded_file:
+    with st.spinner("Parsing Excel file..."):
+        metrics, missing = parse_screener_excel(uploaded_file)
+
+    if missing:
+        st.error(f"⚠️ Missing key metrics in the file: {', '.join(missing)}")
+        st.info("Please re-download the Excel from Screener with all data points.")
+    else:
+        st.success("All required metrics found!")
+        st.subheader("📈 Extracted Key Financial Trends")
+        for key in metrics:
+            plot_metric_trend(key, metrics[key])
+
+        st.subheader("📌 Evaluation Result")
+        results = evaluate_metrics(metrics, rules)
+
+        buy_passed = [r for r in results["buy"] if r[3]]
+        buy_total = len(results["buy"])
+        buy_score = int((len(buy_passed) / buy_total) * 100) if buy_total else 0
+
+        st.markdown(f"### Buy Signal Match: **{buy_score}%**")
+        for r in results["buy"]:
+            status = "✅" if r[3] else "❌"
+            st.write(f"{status} {r[0]}: Latest = {r[1]}, Rule = {r[2]}")
+
+        st.markdown("---")
+        st.markdown(f"### Valuation Check")
+        for r in results["valuation"]:
+            status = "📉 Undervalued" if r[3] else "💰 Overvalued"
+            st.write(f"{r[0]}: Latest = {r[1]}, Rule = {r[2]} → {status}")
+
+        fetch_news("Reliance Industries")
